@@ -24,19 +24,7 @@ This project implements **image steganography** where data (text or binary) is h
 2. Install the required libraries:
 3. Run the `steganography.py` script to hide data in an image and extract it.
 
-## Example Images:
 
-### Original Image
-![Original Image](images/original_image.png)
-*This is the image used for hiding data.*
-
-### Steganographed Image
-![Steganographed Image](images/steganographed_image.png)
-*This image contains hidden data.*
-
-### Extracted Data from Image
-![Extracted Data](images/extracted_data.png)
-*Data extracted from the steganographed image after decryption.*
 
 ## File Structure:
 - **steganography.py**: Python script for embedding and extracting data from images.
