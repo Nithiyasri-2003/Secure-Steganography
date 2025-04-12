@@ -1,0 +1,293 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from PIL import Image
+import numpy as np
+import os
+import base64
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+# Generate RSA keys
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048
+)
+public_key = private_key.public_key()
+
+# Serialize private key
+private_pem = private_key.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption()
+)
+
+# Serialize public key
+public_pem = public_key.public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo
+)
+
+# Function to encrypt text using RSA
+def rsa_encrypt(plain_text):
+    cipher_text = public_key.encrypt(
+        plain_text.encode(),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return base64.b64encode(cipher_text).decode()
+
+# Function to decrypt text using RSA
+def rsa_decrypt(cipher_text):
+    decrypted_text = private_key.decrypt(
+        base64.b64decode(cipher_text),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return decrypted_text.decode()
+
+# Function to encrypt image using AES
+def aes_encrypt(file_path, key):
+    with open(file_path, 'rb') as file:
+        image_data = file.read()
+    
+    salt = os.urandom(16)
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000
+    )
+    key = kdf.derive(key.encode())
+    iv = os.urandom(16)
+    cipher = Cipher(algorithms.AES(key), modes.CFB(iv))
+    encryptor = cipher.encryptor()
+    encrypted_data = encryptor.update(image_data) + encryptor.finalize()
+
+    encrypted_file_path = file_path + '.enc'
+    with open(encrypted_file_path, 'wb') as file:
+        file.write(salt + iv + encrypted_data)
+    
+    return encrypted_file_path
+
+# Function to decrypt image using AES
+def aes_decrypt(file_path, key):
+    with open(file_path, 'rb') as file:
+        data = file.read()
+    
+    salt = data[:16]
+    iv = data[16:32]
+    encrypted_data = data[32:]
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000
+    )
+    key = kdf.derive(key.encode())
+    cipher = Cipher(algorithms.AES(key), modes.CFB(iv))
+    decryptor = cipher.decryptor()
+    decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
+
+    decrypted_file_path = file_path[:-4]  # Remove .enc extension
+    with open(decrypted_file_path, 'wb') as file:
+        file.write(decrypted_data)
+    
+    return decrypted_file_path
+
+# Function to embed text in image using spread spectrum steganography
+def embed_text_in_image(image_path, message, output_path):
+    image = Image.open(image_path)
+    image = image.convert("RGB")
+    np_image = np.array(image)
+    h, w, _ = np_image.shape
+
+    binary_message = ''.join(format(ord(i), '08b') for i in message)
+    binary_message += '00000000'  # Delimiter to signify end of message
+    
+    # Generate a pseudo-random sequence of positions for embedding the message
+    np.random.seed(0)  # Use a fixed seed for reproducibility
+    rand_indices = np.random.permutation(h * w * 3)
+
+    data_index = 0
+    for index in rand_indices:
+        if data_index >= len(binary_message):
+            break
+        i = index // (w * 3)
+        j = (index % (w * 3)) // 3
+        k = index % 3
+
+        pixel = list(np_image[i, j])
+        pixel[k] = pixel[k] & ~1 | int(binary_message[data_index], 2)
+        np_image[i, j] = tuple(pixel)
+        data_index += 1
+
+    encoded_image = Image.fromarray(np_image)
+    encoded_image.save(output_path)
+    return output_path
+
+# Function to extract text from image using spread spectrum steganography
+def extract_text_from_image(image_path):
+    image = Image.open(image_path)
+    image = image.convert("RGB")
+    np_image = np.array(image)
+    h, w, _ = np_image.shape
+
+    # Generate the same pseudo-random sequence of positions for extracting the message
+    np.random.seed(0)  # Use the same fixed seed
+    rand_indices = np.random.permutation(h * w * 3)
+
+    binary_message = ""
+    for index in rand_indices:
+        i = index // (w * 3)
+        j = (index % (w * 3)) // 3
+        k = index % 3
+
+        pixel = list(np_image[i, j])
+        binary_message += str(pixel[k] & 1)
+
+        if len(binary_message) % 8 == 0 and binary_message[-8:] == '00000000':
+            return ''.join([chr(int(binary_message[i:i+8], 2)) for i in range(0, len(binary_message)-8, 8)])
+    
+    return "Message delimiter not found"
+
+# Create main window
+root = tk.Tk()
+root.title("Encryption/Decryption Tool")
+
+# RSA Text Encryption
+tk.Label(root, text="RSA Text Encryption").grid(row=0, column=0, columnspan=3)
+
+tk.Label(root, text="Plain Text (max 245 bytes)").grid(row=1, column=0)
+plain_text_entry = tk.Entry(root, width=50)
+plain_text_entry.grid(row=1, column=1)
+
+def encrypt_text():
+    plain_text = plain_text_entry.get()
+    if plain_text:
+        try:
+            cipher_text = rsa_encrypt(plain_text)
+            encrypted_text_entry.delete(0, tk.END)
+            encrypted_text_entry.insert(0, cipher_text)
+        except Exception as e:
+            messagebox.showerror("Encryption Error", f"An error occurred during encryption: {e}")
+    else:
+        messagebox.showwarning("Input Error", "Please enter text to encrypt")
+
+tk.Button(root, text="Encrypt", command=encrypt_text).grid(row=1, column=2)
+
+tk.Label(root, text="Encrypted Text").grid(row=2, column=0)
+encrypted_text_entry = tk.Entry(root, width=50)
+encrypted_text_entry.grid(row=2, column=1)
+
+def decrypt_text():
+    cipher_text = encrypted_text_entry.get()
+    if cipher_text:
+        try:
+            decrypted_text = rsa_decrypt(cipher_text)
+            decrypted_text_entry.delete(0, tk.END)
+            decrypted_text_entry.insert(0, decrypted_text)
+        except Exception as e:
+            messagebox.showerror("Decryption Error", f"An error occurred during decryption: {e}")
+    else:
+        messagebox.showwarning("Input Error", "Please enter text to decrypt")
+
+tk.Button(root, text="Decrypt", command=decrypt_text).grid(row=2, column=2)
+
+tk.Label(root, text="Decrypted Text").grid(row=3, column=0)
+decrypted_text_entry = tk.Entry(root, width=50)
+decrypted_text_entry.grid(row=3, column=1)
+
+# AES Image Encryption
+tk.Label(root, text="AES Image Encryption").grid(row=4, column=0, columnspan=3)
+
+def encrypt_image():
+    file_path = filedialog.askopenfilename(title="Select Image")
+    if file_path:
+        key = aes_key_entry.get()
+        if key:
+            try:
+                encrypted_file_path = aes_encrypt(file_path, key)
+                messagebox.showinfo("Success", f"Image encrypted successfully: {encrypted_file_path}")
+            except Exception as e:
+                messagebox.showerror("Encryption Error", f"An error occurred during encryption: {e}")
+        else:
+            messagebox.showwarning("Input Error", "Please enter a key for AES encryption")
+
+tk.Button(root, text="Encrypt Image", command=encrypt_image).grid(row=5, column=0, columnspan=3)
+
+tk.Label(root, text="AES Key (at least 8 characters)").grid(row=6, column=0)
+aes_key_entry = tk.Entry(root, width=50)
+aes_key_entry.grid(row=6, column=1)
+
+def decrypt_image():
+    file_path = filedialog.askopenfilename(title="Select Encrypted Image")
+    if file_path:
+        key = aes_key_entry.get()
+        if key:
+            try:
+                decrypted_file_path = aes_decrypt(file_path, key)
+                messagebox.showinfo("Success", f"Image decrypted successfully: {decrypted_file_path}")
+            except Exception as e:
+                messagebox.showerror("Decryption Error", f"An error occurred during decryption: {e}")
+        else:
+            messagebox.showwarning("Input Error", "Please enter a key for AES decryption")
+
+tk.Button(root, text="Decrypt Image", command=decrypt_image).grid(row=6, column=2)
+
+# Steganography Embedding
+tk.Label(root, text="Steganography Embedding").grid(row=7, column=0, columnspan=3)
+
+tk.Label(root, text="Text to Embed").grid(row=8, column=0)
+embed_text_entry = tk.Entry(root, width=50)
+embed_text_entry.grid(row=8, column=1)
+
+def embed_text():
+    image_path = filedialog.askopenfilename(title="Select Image")
+    message = embed_text_entry.get()
+    if image_path and message:
+        try:
+            output_path = filedialog.asksaveasfilename(defaultextension=".png", title="Save Embedded Image As")
+            if output_path:
+                embed_text_in_image(image_path, message, output_path)
+                messagebox.showinfo("Success", f"Text embedded successfully in image: {output_path}")
+        except Exception as e:
+            messagebox.showerror("Embedding Error", f"An error occurred during embedding: {e}")
+    else:
+        messagebox.showwarning("Input Error", "Please select an image and enter text to embed")
+
+tk.Button(root, text="Embed Text", command=embed_text).grid(row=8, column=2)
+
+# Steganography Extraction
+tk.Label(root, text="Steganography Extraction").grid(row=9, column=0, columnspan=3)
+
+def extract_text():
+    image_path = filedialog.askopenfilename(title="Select Image")
+    if image_path:
+        try:
+            extracted_text = extract_text_from_image(image_path)
+            extracted_text_entry.delete(0, tk.END)
+            extracted_text_entry.insert(0, extracted_text)
+            messagebox.showinfo("Success", "Text extracted successfully")
+        except Exception as e:
+            messagebox.showerror("Extraction Error", f"An error occurred during extraction: {e}")
+    else:
+        messagebox.showwarning("Input Error", "Please select an image to extract text from")
+
+tk.Button(root, text="Extract Text", command=extract_text).grid(row=10, column=0, columnspan=3)
+
+tk.Label(root, text="Extracted Text").grid(row=11, column=0)
+extracted_text_entry = tk.Entry(root, width=50)
+extracted_text_entry.grid(row=11, column=1)
+
+# Start the GUI event loop
+root.mainloop()
